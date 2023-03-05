@@ -1,0 +1,132 @@
+#!/bin/sh
+
+#==================================================================================================
+#title           :quicklab
+#description     :quickly create/destroy multiple vms on vmware vcenter
+#author          :Wesley van Tilburg
+#license         :MIT
+#date            :05/03/2023
+#version         :0.1
+#=================================================================================================
+
+usage(){ printf "quicklab v0.1; 
+USAGE
+	quicklab  [args...]
+ARGS
+	-d enable debug logging
+	-s the vcenter server
+	-u username to login
+	-i ignore certificate errors
+	-m mode (create,destroy)
+	-f the file containing the lab settings
+	-h show this menu
+";
+exit 0
+}
+
+#=================Util functionomais=================
+
+#Edit version of the log functions for aweb by job79
+log() printf '\033[%sm%-0s \e[0m| %s\n' "${1:-33}" "$2" "$3" 
+
+debug(){ if [ "$DEBUG" ]; then log "37" "DEBUG" "$1";fi }
+info()  log "34" "INFO" "$1"
+warn()  log "33" "WARNING" "$1" 
+err(){ log "06;31" "ERROR" "$1"; exit 1; }
+
+#curl helper functions
+request() eval "$CURL $1"
+get() request "-X GET $1"
+post() request "-X POST $1"
+#===============================================
+
+
+#================= Create Logic =================
+create(){
+	#create a temp dir to store the json
+	TMP="$(mktemp -d)"
+
+	#parse the placement
+	info "Parsing placement fields and getting ids.."
+	fields="cluster resource-pool datastore folder"
+	for field in $fields 
+	do
+		#get the value from the yml
+		yfield=".placement.$field"
+		yvalue="$(yq -r "$yfield" $FILE)"
+
+		#get the correct element for field $field and name $yvalue (name) if it does exists and is accessible by the user
+		idjson="$(get "$SERVER/api/vcenter/$field" | jq --arg value "$yvalue" -r '.[] | select(.name==$value)')"
+
+		#Fix the stupid naming domaiifference: api url: resource-pool, response json: resource_pool
+		if [ "$field" == "resource-pool" ]; then field="resource_pool"; fi 
+
+		id="$(echo $idjson | jq --arg field "$field" -r '.[$field]')"
+		if [ -z "$id" ]; then err "Failed to get id for '$field' with the name '$yvalue' "; fi
+		debug "$field : $id"
+
+		#todo: create the placement json
+	done
+
+}
+
+#================= Dependency Logic =================
+#Check if the requirements are installed
+tools="curl jq yq"
+for tool in $tools
+do
+	if ! command -v $tool >/dev/null; then err "Missing dependency: $tool";fi
+done
+
+#================= Argument Logic=================
+#Default curl arguments
+CURL="curl -s "
+
+#handle input
+while getopts 'du:m:f:is:h' OPTION 2>/dev/null; do
+	case "$OPTION" in
+		d) DEBUG=true;;
+		f) FILE="$OPTARG";;
+		h) usage; exit 0;;
+		i) CURL="$CURL -k";;
+		m) METHOD="$OPTARG";;
+		s) SERVER="$OPTARG";;
+		u) USER="$OPTARG";;
+	esac
+done
+
+#check the required arguments
+if [ -z "$FILE" ] || [ -z "$METHOD" ] || [ -z "$SERVER" ] || [ -z "$USER" ] ; then err "One of the required arguments is missing"; fi;
+
+
+#validate method, this check serves as an early exit
+if  [ "$METHOD" != "create" ] && [ "$METHOD" != "destroy" ]; then err "Method: '$METHOD' is not valid"; fi;
+
+#Append https:// if not given
+if ! echo "$SERVER" | grep -E -q "(http|https)://)"; then 
+	SERVER="https://$SERVER"
+fi
+
+#make sure that the file exists
+if ! [ -f "$FILE" ]; then err "File: '$FILE' does not exist."; fi
+
+#Make sure we can access the server
+if ! nc -zw2 "$(echo $SERVER | cut -d// -f3 )" 443 2>/dev/null; then err "Cannot reach server '$SERVER'"; fi;
+
+#Read the password
+info "Enter password (Will not echo)";stty -echo;read PASS; stty echo
+info "Trying to login.."
+
+#Login to the server
+session="$(post "$SERVER/api/session -u $USER:$PASS" | jq -r )"
+if ! [ -z "$( echo $session | grep error)" ]; then err "Failed to login"; fi
+info "Login successful"
+CURL="$CURL -H 'vmware-api-session-id: $session'"
+
+#Execute correct logic
+case $METHOD in
+	create) create;;
+esac
+
+
+
