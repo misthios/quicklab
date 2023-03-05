@@ -1,0 +1,6 @@
+name: lab1
+placement:
+        cluster: cluster1
+        resource-pool: pool1
+        datastore: store1
+        folder: folder1
