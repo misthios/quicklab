@@ -43,7 +43,7 @@ post() request "-X POST $1"
 
 #================= Create Logic =================
 create(){
-	#create a temp dir to store the json
+	#create a temp dir 
 	TMP="$(mktemp -d)"
 
 	#parse the placement
@@ -65,8 +65,12 @@ create(){
 		if [ -z "$id" ]; then err "Failed to get id for '$field' with the name '$yvalue' "; fi
 		debug "$field : $id"
 
-		#todo: create the placement json
+		#create a $field.json
+		jq -n --arg field "$field" --arg id "$id" '{ "placement": { '$field': $id}}' >> "$TMP/$field".json
 	done
+	PLACEJSON="$(jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/"*.json >> "$TMP/placement.json")"
+	debug "placement json: $(cat "$TMP/placement.json")"
+
 
 }
 
@@ -127,6 +131,7 @@ CURL="$CURL -H 'vmware-api-session-id: $session'"
 case $METHOD in
 	create) create;;
 esac
+
 
 
 
