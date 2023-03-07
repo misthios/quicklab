@@ -40,13 +40,8 @@ get() request "-X GET $1"
 post() request "-X POST $1"
 #===============================================
 
-
-#================= Create Logic =================
-create(){
-	#create a temp dir 
-	TMP="$(mktemp -d)"
-
-	#parse the placement
+#Parse the placement field 
+parse_placement(){
 	info "Parsing placement fields and getting ids.."
 	fields="cluster resource-pool datastore folder"
 	for field in $fields 
@@ -58,7 +53,7 @@ create(){
 		#get the correct element for field $field and name $yvalue (name) if it does exists and is accessible by the user
 		idjson="$(get "$SERVER/api/vcenter/$field" | jq --arg value "$yvalue" -r '.[] | select(.name==$value)')"
 
-		#Fix the stupid naming domaiifference: api url: resource-pool, response json: resource_pool
+		#Fix the stupid naming difference: api url: resource-pool, response json: resource_pool
 		if [ "$field" == "resource-pool" ]; then field="resource_pool"; fi 
 
 		id="$(echo $idjson | jq --arg field "$field" -r '.[$field]')"
@@ -68,8 +63,46 @@ create(){
 		#create a $field.json
 		jq -n --arg field "$field" --arg id "$id" '{ "placement": { '$field': $id}}' >> "$TMP/$field".json
 	done
+
+	#create the placement json
 	PLACEJSON="$(jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/"*.json >> "$TMP/placement.json")"
 	debug "placement json: $(cat "$TMP/placement.json")"
+}
+
+
+#================= Create Logic =================
+create(){
+	#create a temp dir 
+	TMP="$(mktemp -d)"
+
+	#parse the placement field
+	parse_placement
+	
+	#Get all networks that the user can access to limit calls
+	networks="$(get "$SERVER/api/vcenter/network")"
+	debug "networks: $networks"
+
+	#get amount of vms
+	vms="$(yq '.vms | length' "$FILE" 2>/dev/null)"
+	if [ "$vms" -eq 0 ]; then err "No vms found in '$FILE'"; fi
+	index=0
+	info "Parsing vms.."
+
+	#parse all the vms
+	while [ "$index" -lt "$vms" ]
+	do
+		debug "Parsing vm: $index"
+		mkdir -p "$TMP/$index" && cp "$TMP/placement.json" "$TMP/$index"
+
+		#simple fields
+		name="$(yq -r ".vms["$index"] .name" "$FILE")"
+		os="$(yq -r ".vms["$index"] .guestOS" "$FILE")"
+
+		index=$((index+1))
+
+	#create the vm
+	#post "-H 'Content-Type: application/json' -d @$TMP/$index/vm.json $SERVER/api/vcenter/vm"
+	done
 
 
 }
