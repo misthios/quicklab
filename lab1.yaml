@@ -1,6 +1,20 @@
-name: lab1
+name: lab-in-10
 placement:
         cluster: cluster1
-        resource-pool: pool1
-        datastore: store1
+        resource-pool: resource-pool1
+        datastore: datastore1
         folder: folder1
+
+vms:
+  - 
+     name: router
+     guest_OS: DOS
+     cores: 2
+     memory: 20MB
+  - 
+     name: host1
+     guest_OS: DOS
+     cores: 4
+     memory: 2.3GB
+
+

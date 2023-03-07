@@ -32,7 +32,8 @@ log() printf '\033[%sm%-0s \e[0m| %s\n' "${1:-33}" "$2" "$3"
 debug(){ if [ "$DEBUG" ]; then log "37" "DEBUG" "$1";fi }
 info()  log "34" "INFO" "$1"
 warn()  log "33" "WARNING" "$1" 
-err(){ log "06;31" "ERROR" "$1"; exit 1; }
+err() log "06;31" "ERROR" "$1"
+errf(){ log "06;31" "ERROR" "$1"; exit 1; } #fatal error variant
 
 #curl helper functions
 request() eval "$CURL $1"
@@ -57,7 +58,7 @@ parse_placement(){
 		if [ "$field" == "resource-pool" ]; then field="resource_pool"; fi 
 
 		id="$(echo $idjson | jq --arg field "$field" -r '.[$field]')"
-		if [ -z "$id" ]; then err "Failed to get id for '$field' with the name '$yvalue' "; fi
+		if [ -z "$id" ]; then errf "Failed to get id for '$field' with the name '$yvalue' "; fi
 		debug "$field : $id"
 
 		#create a $field.json
@@ -84,7 +85,7 @@ create(){
 
 	#get amount of vms
 	vms="$(yq '.vms | length' "$FILE" 2>/dev/null)"
-	if [ "$vms" -eq 0 ]; then err "No vms found in '$FILE'"; fi
+	if [ "$vms" -eq 0 ]; then errf "No vms found in '$FILE'"; fi
 	index=0
 	info "Parsing vms.."
 
@@ -94,14 +95,34 @@ create(){
 		debug "Parsing vm: $index"
 		mkdir -p "$TMP/$index" && cp "$TMP/placement.json" "$TMP/$index"
 
-		#simple fields
+		#handle the simple fields
 		name="$(yq -r ".vms["$index"] .name" "$FILE")"
-		os="$(yq -r ".vms["$index"] .guestOS" "$FILE")"
+		os="$(yq -r ".vms["$index"] .guest_OS" "$FILE")"
+		cores="$(yq -r ".vms["$index"] .cores" "$FILE")"
+		if ! memory="$(units -o "%f" -t "$(yq -r ".vms[$index].memory" ./lab2.yaml)" "MB" | cut -d. -f1 2>/dev/null)"; then
+			err "Failed to parse memory for vm '$name'"
+			continue
+		fi
+		debug "memory $memory"
+
+		#create the json for the simple parts
+		jq -n --arg name "$name" --arg os "$os" --arg cores "$cores" --arg memory "$memory" '{"name":$name,"guest_OS":$os,"cpu":{"count":$cores},"memory":{"size_MiB":$memory}}' >> "$TMP/$index/simple.json"
+
+		#create the final vm json
+	        jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/$index/"*.json >> "$TMP/$index/vm.json"
+		debug "VM json: $(cat $TMP/$index/vm.json)"
+
+		#create the vm and save the id to a file
+		resp="$(post "-H 'Content-Type: application/json' -d @$TMP/$index/vm.json $SERVER/api/vcenter/vm")"
+		err="$(echo "$resp" | jq -r '.error_type' 2>/dev/null)"
+		if [ -z "$err" ]; then
+			info "Created vm '$name' with id $resp"
+		else
+			err "Failed to create vm '$name' due to the following reason '$resp'"
+		fi
+	
 
 		index=$((index+1))
-
-	#create the vm
-	#post "-H 'Content-Type: application/json' -d @$TMP/$index/vm.json $SERVER/api/vcenter/vm"
 	done
 
 
@@ -156,7 +177,7 @@ info "Trying to login.."
 
 #Login to the server
 session="$(post "$SERVER/api/session -u $USER:$PASS" | jq -r )"
-if ! [ -z "$( echo $session | grep error)" ]; then err "Failed to login"; fi
+if ! [ -z "$( echo $session | grep error)" ]; then errf "Failed to login"; fi
 info "Login successful"
 CURL="$CURL -H 'vmware-api-session-id: $session'"
 
