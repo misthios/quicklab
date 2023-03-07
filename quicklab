@@ -71,6 +71,38 @@ parse_placement(){
 }
 
 
+#parse the nics
+#$1 is the vm index
+#$2 are the vm nics
+parse_nics(){
+	#get the amount of nics
+	nics="$( echo "$2" | yq -r ". | length" )"
+	debug "nics: $nics"
+	local index=0
+	jnics=""
+
+	while [ "$index" -lt "$nics" ]
+	do
+		ynetwork="$(echo "$2" | yq -r ".["$index"] .network")"
+
+		jnetwork="$(echo "$NETWORKS"| jq --arg value "$ynetwork" -r '.[] | select(.name==$value)')"
+		type="$(echo "$jnetwork" | jq -r '.type')"
+		network="$(echo "$jnetwork" | jq -r '.network')"
+
+		#create nic json 
+		jnic="$(jq -n --arg type "$type" --arg network "$network" \
+			'{"backing":{"network":$network,"type":$type},"start_connected": true}')"
+		jnics="$jnics $jnic"
+		index=$((index+1))
+	done
+
+	#create the nic json array
+	echo $jnics | jq -n '.nics |= [inputs]' >> "$TMP/$1/nics.json"
+	
+	
+}
+
+
 #================= Create Logic =================
 create(){
 	#create a temp dir 
@@ -80,13 +112,13 @@ create(){
 	parse_placement
 	
 	#Get all networks that the user can access to limit calls
-	networks="$(get "$SERVER/api/vcenter/network")"
-	debug "networks: $networks"
+	NETWORKS="$(get "$SERVER/api/vcenter/network")"
+	debug "networks: $NETWORKS"
 
 	#get amount of vms
 	vms="$(yq '.vms | length' "$FILE" 2>/dev/null)"
 	if [ "$vms" -eq 0 ]; then errf "No vms found in '$FILE'"; fi
-	index=0
+	local index=0
 	info "Parsing vms.."
 
 	#parse all the vms
@@ -108,8 +140,10 @@ create(){
 		#create the json for the simple parts
 		jq -n --arg name "$name" --arg os "$os" --arg cores "$cores" --arg memory "$memory" '{"name":$name,"guest_OS":$os,"cpu":{"count":$cores},"memory":{"size_MiB":$memory}}' >> "$TMP/$index/simple.json"
 
+		parse_nics "$index" "$(yq -r ".vms[$index] .nics" $FILE)" 
+
 		#create the final vm json
-	        jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/$index/"*.json >> "$TMP/$index/vm.json"
+	        jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/$index"/*.json >> "$TMP/$index/vm.json"
 		debug "VM json: $(cat $TMP/$index/vm.json)"
 
 		#create the vm and save the id to a file

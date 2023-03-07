@@ -10,11 +10,23 @@ vms:
      name: router
      guest_OS: DOS
      cores: 2
-     memory: 20MB
+     memory: 900MB
+     nics:
+       -
+        network: vlana
+       -
+        network: vlanb
   - 
-     name: host1
+     name: switch
      guest_OS: DOS
      cores: 4
-     memory: 2.3GB
-
-
+     memory: 900MB
+     nics:
+       -
+        network: vlanc
+       -
+        network: vland
+       -
+        network: vlane
+       -
+        network: vlanf
