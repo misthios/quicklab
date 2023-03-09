@@ -16,6 +16,20 @@ vms:
         network: vlana
        -
         network: vlanb
+     disks:
+       -
+        name: diska
+        capacity: 80GB
+       -
+        name: diskb
+        capacity: 15GB
+       -
+        name: diskc
+        capacity: 1GB
+       -
+        name: diskd
+        capacity: 5GB
+  - 
   - 
      name: switch
      guest_OS: DOS

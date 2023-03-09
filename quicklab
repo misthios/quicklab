@@ -70,7 +70,6 @@ parse_placement(){
 	debug "placement json: $(cat "$TMP/placement.json")"
 }
 
-
 #parse the nics
 #$1 is the vm index
 #$2 are the vm nics
@@ -98,8 +97,35 @@ parse_nics(){
 
 	#create the nic json array
 	echo $jnics | jq -n '.nics |= [inputs]' >> "$TMP/$1/nics.json"
-	
-	
+}
+
+#parse the disks
+#$1 is the vm index
+#$2 are the vm disks
+parse_disks(){
+	#get the amount of disks
+	disks="$( echo "$2" | yq -r ". | length" )"
+	debug "disks: $disks"
+	local index=0
+	jdisks=""
+
+	while [ "$index" -lt "$disks" ]
+	do
+		local name="$(echo "$2" | yq -r ".["$index"] .name")"
+		if ! capacity="$(units -o "%f" -t "$(echo "$2" | yq -r ".["$index"] .capacity")" "bytes" | cut -d. -f1 2>/dev/null)"; then
+			err "Failed to parse disk capacity for vm '$1' disk '$name'"
+			continue
+		fi
+
+		#create disk json 
+		jdisk="$(jq -n --arg name "$name" --arg capacity "$capacity" \
+			'{"new_vmdk":{"capacity":$capacity,"name":$name},"type": "IDE"}')"
+		jdisks="$jdisks $jdisk"
+		index=$((index+1))
+	done
+
+	#create the disk json array
+	echo $jdisks | jq -n '.disks |= [inputs]' >> "$TMP/$1/disks.json"
 }
 
 
@@ -128,7 +154,7 @@ create(){
 		mkdir -p "$TMP/$index" && cp "$TMP/placement.json" "$TMP/$index"
 
 		#handle the simple fields
-		name="$(yq -r ".vms["$index"] .name" "$FILE")"
+		local name="$(yq -r ".vms["$index"] .name" "$FILE")"
 		os="$(yq -r ".vms["$index"] .guest_OS" "$FILE")"
 		cores="$(yq -r ".vms["$index"] .cores" "$FILE")"
 		if ! memory="$(units -o "%f" -t "$(yq -r ".vms[$index].memory" ./lab2.yaml)" "MB" | cut -d. -f1 2>/dev/null)"; then
@@ -141,6 +167,7 @@ create(){
 		jq -n --arg name "$name" --arg os "$os" --arg cores "$cores" --arg memory "$memory" '{"name":$name,"guest_OS":$os,"cpu":{"count":$cores},"memory":{"size_MiB":$memory}}' >> "$TMP/$index/simple.json"
 
 		parse_nics "$index" "$(yq -r ".vms[$index] .nics" $FILE)" 
+		parse_disks "$index" "$(yq -r ".vms[$index] .disks" $FILE)" 
 
 		#create the final vm json
 	        jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/$index"/*.json >> "$TMP/$index/vm.json"
