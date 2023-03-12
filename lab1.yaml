@@ -29,7 +29,15 @@ vms:
        -
         name: diskd
         capacity: 5GB
-  - 
+     cds:
+       -
+        iso_file: "[datastore1] isos/myiso.iso"
+        start_connected: true
+        allow_guest_control: true
+       -
+        iso_file: "[datastore1] isos/myiso2.iso"
+        start_connected: false
+        allow_guest_control: false
   - 
      name: switch
      guest_OS: DOS

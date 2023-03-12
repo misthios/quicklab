@@ -24,7 +24,7 @@ ARGS
 exit 0
 }
 
-#=================Util functionomais=================
+#=================Util functions=================
 
 #Edit version of the log functions for aweb by job79
 log() printf '\033[%sm%-0s \e[0m| %s\n' "${1:-33}" "$2" "$3" 
@@ -128,6 +128,34 @@ parse_disks(){
 	echo $jdisks | jq -n '.disks |= [inputs]' >> "$TMP/$1/disks.json"
 }
 
+#parse the cds
+#$1 is the vm index
+#$2 are the vm cds
+parse_cds(){
+	#get the amount of cds
+	cds="$( echo "$2" | yq -r ". | length" )"
+	debug "cds: $cds"
+	local index=0
+	jcds=""
+
+	while [ "$index" -lt "$cds" ]
+	do
+		iso="$(echo "$2" | yq -r ".["$index"] .iso_file")"
+		connected="$(echo "$2" | yq -r ".["$index"] .start_connected")"
+		control="$(echo "$2" | yq -r ".["$index"] .allow_guest_control")"
+	
+		#create cds json 
+		jcd="$(jq -n --arg iso "$iso" --arg control "$control" --arg connected "$connected" \
+			'{"backing":{"iso_file":$iso,"type":"ISO_FILE"},"allow_guest_control": $control,"type":"IDE", "start_connected" : $connected}')"
+		jcds="$jcds $jcd"
+		index=$((index+1))
+	done
+
+	#create the disk json array
+	echo $jcds | jq -n '.cdroms |= [inputs]' >> "$TMP/$1/cds.json"
+}
+
+
 
 #================= Create Logic =================
 create(){
@@ -166,8 +194,10 @@ create(){
 		#create the json for the simple parts
 		jq -n --arg name "$name" --arg os "$os" --arg cores "$cores" --arg memory "$memory" '{"name":$name,"guest_OS":$os,"cpu":{"count":$cores},"memory":{"size_MiB":$memory}}' >> "$TMP/$index/simple.json"
 
+		#Handle the seperate hardware fields
 		parse_nics "$index" "$(yq -r ".vms[$index] .nics" $FILE)" 
 		parse_disks "$index" "$(yq -r ".vms[$index] .disks" $FILE)" 
+		parse_cds "$index" "$(yq -r ".vms[$index] .cds" $FILE)" 
 
 		#create the final vm json
 	        jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/$index"/*.json >> "$TMP/$index/vm.json"
@@ -215,11 +245,11 @@ while getopts 'du:m:f:is:h' OPTION 2>/dev/null; do
 done
 
 #check the required arguments
-if [ -z "$FILE" ] || [ -z "$METHOD" ] || [ -z "$SERVER" ] || [ -z "$USER" ] ; then err "One of the required arguments is missing"; fi;
+if [ -z "$FILE" ] || [ -z "$METHOD" ] || [ -z "$SERVER" ] || [ -z "$USER" ] ; then errf "One of the required arguments is missing"; fi;
 
 
 #validate method, this check serves as an early exit
-if  [ "$METHOD" != "create" ] && [ "$METHOD" != "destroy" ]; then err "Method: '$METHOD' is not valid"; fi;
+if  [ "$METHOD" != "create" ] && [ "$METHOD" != "destroy" ]; then errf "Method: '$METHOD' is not valid"; fi;
 
 #Append https:// if not given
 if ! echo "$SERVER" | grep -E -q "(http|https)://)"; then 
@@ -227,10 +257,10 @@ if ! echo "$SERVER" | grep -E -q "(http|https)://)"; then
 fi
 
 #make sure that the file exists
-if ! [ -f "$FILE" ]; then err "File: '$FILE' does not exist."; fi
+if ! [ -f "$FILE" ]; then errf "File: '$FILE' does not exist."; fi
 
 #Make sure we can access the server
-if ! nc -zw2 "$(echo $SERVER | cut -d// -f3 )" 443 2>/dev/null; then err "Cannot reach server '$SERVER'"; fi;
+if ! nc -zw2 "$(echo $SERVER | cut -d// -f3 )" 443 2>/dev/null; then errf "Cannot reach server '$SERVER'"; fi;
 
 #Read the password
 info "Enter password (Will not echo)";stty -echo;read PASS; stty echo
