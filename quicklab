@@ -275,8 +275,22 @@ if ! echo "$SERVER" | grep -E -q "(http|https)://)"; then
 	SERVER="https://$SERVER"
 fi
 
-#make sure that the file exists
+#make sure that the file exists and its either a valid json or yaml file
 if ! [ -f "$FILE" ]; then errf "File: '$FILE' does not exist."; fi
+
+type="$(echo "$FILE" | sed 's/.*\.//')"
+debug "input file type : $type"
+if  [ "$type" != "yaml" ] && [ "$type" != "json" ]; then errf "File type: '$type' is not supported"; fi;
+
+#use jq/yq to check if the file is valid
+if [ "$type" == "json" ]; then
+	if ! cat "$FILE" | jq  &>/dev/null; then errf "Failed to parse file '$FILE'"; fi
+fi
+if [ "$type" == "yaml" ]; then
+	if ! yq "$FILE" &>/dev/null; then errf "Failed to parse file '$FILE'"; fi
+fi
+
+debug "'$FILE' is a valid json/yaml file"
 
 #Make sure we can access the server
 if ! nc -zw2 "$(echo $SERVER | cut -d// -f3 )" 443 2>/dev/null; then errf "Cannot reach server '$SERVER'"; fi;
