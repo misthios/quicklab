@@ -39,6 +39,7 @@ errf(){ log "06;31" "ERROR" "$1"; exit 1; } #fatal error variant
 request() eval "$CURL $1"
 get() request "-X GET $1"
 post() request "-X POST $1"
+delete() request "-X DELETE $1"
 #===============================================
 
 #Parse the placement field 
@@ -238,6 +239,44 @@ create(){
 		echo $jvms | jq -n '.vms |= [inputs]' >> "$PWD/$filename.json"
 }
 
+#================= Destroy Logic =================
+destroy(){
+	#get the amount of cds
+	vms="$(cat "$FILE" | jq -r ".vms | length" )"
+	debug "vms: $vms"
+	local index=0
+	info "Parsing vms.."
+
+	while [ "$index" -lt "$vms" ]
+	do
+		name="$(cat "$FILE" | jq -r --argjson index "$index" '.vms[$index] .name')"
+		id="$(cat "$FILE" | jq -r --argjson index "$index" '.vms[$index] .id')"
+		debug "Name: $name"
+		debug "ID: $id"
+
+		#get the power state and shut the vm down if required
+		state="$(get "$SERVER/api/vcenter/vm/$id/power" | jq -r '.state')"
+		debug "Power state: $state"
+		if ! [ "$state" == "POWERED_OFF" ]; then
+			if ! post "$SERVER/api/vcenter/vm/$id/power?action=stop"; then
+				err "Failed to stop VM '$name' with id: '$id'"
+				continue
+			else
+					info "Stopped VM '$name' with id: '$id'"
+			fi
+		fi
+
+		#delete the vm
+		if ! delete "$SERVER/api/vcenter/vm/$id/"; then
+			err "Failed to delete VM '$name' with id: '$id'"
+			continue
+		else
+			info "Deleted VM '$name' with id: '$id'"
+		fi
+
+		index=$((index+1))
+	done
+}
 #================= Dependency Logic =================
 #Check if the requirements are installed
 tools="curl jq yq"
@@ -275,8 +314,26 @@ if ! echo "$SERVER" | grep -E -q "(http|https)://)"; then
 	SERVER="https://$SERVER"
 fi
 
-#make sure that the file exists
+#make sure that the file exists and its either a valid json or yaml file
 if ! [ -f "$FILE" ]; then errf "File: '$FILE' does not exist."; fi
+
+type="$(echo "$FILE" | sed 's/.*\.//')"
+debug "input file type : $type"
+if  [ "$type" != "yaml" ] && [ "$type" != "json" ]; then errf "File type: '$type' is not supported"; fi;
+
+#make sure that the methods only get their supported types: create = yaml, destroy = json
+if [ "$METHOD" == "create" ] && [ "$type" != "yaml" ]; then errf "Method '$METHOD' only accepts 'yaml'"; fi
+if [ "$METHOD" == "destroy" ] && [ "$type" != "json" ]; then errf "Method '$METHOD' only accepts 'json'"; fi
+
+#use jq/yq to check if the file is valid
+if [ "$type" == "json" ]; then
+	if ! cat "$FILE" | jq  &>/dev/null; then errf "Failed to parse file '$FILE'"; fi
+fi
+if [ "$type" == "yaml" ]; then
+	if ! yq "$FILE" &>/dev/null; then errf "Failed to parse file '$FILE'"; fi
+fi
+
+debug "'$FILE' is a valid json/yaml file"
 
 #Make sure we can access the server
 if ! nc -zw2 "$(echo $SERVER | cut -d// -f3 )" 443 2>/dev/null; then errf "Cannot reach server '$SERVER'"; fi;
@@ -294,6 +351,7 @@ CURL="$CURL -H 'vmware-api-session-id: $session'"
 #Execute correct logic
 case $METHOD in
 	create) create;;
+	destroy) destroy;;
 esac
 
 
