@@ -321,6 +321,10 @@ type="$(echo "$FILE" | sed 's/.*\.//')"
 debug "input file type : $type"
 if  [ "$type" != "yaml" ] && [ "$type" != "json" ]; then errf "File type: '$type' is not supported"; fi;
 
+#make sure that the methods only get their supported types: create = yaml, destroy = json
+if [ "$METHOD" == "create" ] && [ "$type" != "yaml" ]; then errf "Method '$METHOD' only accepts 'yaml'"; fi
+if [ "$METHOD" == "destroy" ] && [ "$type" != "json" ]; then errf "Method '$METHOD' only accepts 'json'"; fi
+
 #use jq/yq to check if the file is valid
 if [ "$type" == "json" ]; then
 	if ! cat "$FILE" | jq  &>/dev/null; then errf "Failed to parse file '$FILE'"; fi
