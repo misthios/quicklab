@@ -162,6 +162,10 @@ create(){
 	#create a temp dir 
 	TMP="$(mktemp -d)"
 
+	#some vars
+	filename="$(basename $FILE .yaml )"
+	jvms=""
+
 	#parse the placement field
 	parse_placement
 	
@@ -210,6 +214,10 @@ create(){
 			id="$(echo $resp | jq -r )"
 			info "Created vm '$name' with id $id"
 
+			#create the following json: {"name": "vmname", "id":"vm-******"}
+                        jvm="$(jq -n --arg name "$name" --arg id "$id" '{"name": $name, "id",$id}' )"
+			jvms="$jvms $jvm"
+
 			#start the vm after creation if required
 			start="$(yq -r ".vms["$index"] .start_after_creation" "$FILE")"
 			if "$start"; then 
@@ -224,11 +232,10 @@ create(){
 			err "Failed to create vm '$name' due to the following reason '$resp'"
 		fi
 	
-
 		index=$((index+1))
 	done
-
-
+		#store the vm in json format which can be used by the destory method/ other tools
+		echo $jvms | jq -n '.vms |= [inputs]' >> "$PWD/$filename.json"
 }
 
 #================= Dependency Logic =================
