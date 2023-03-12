@@ -207,7 +207,19 @@ create(){
 		resp="$(post "-H 'Content-Type: application/json' -d @$TMP/$index/vm.json $SERVER/api/vcenter/vm")"
 		err="$(echo "$resp" | jq -r '.error_type' 2>/dev/null)"
 		if [ -z "$err" ]; then
-			info "Created vm '$name' with id $resp"
+			id="$(echo $resp | jq -r )"
+			info "Created vm '$name' with id $id"
+
+			#start the vm after creation if required
+			start="$(yq -r ".vms["$index"] .start_after_creation" "$FILE")"
+			if "$start"; then 
+				info "Starting VM '$name' with id: '$id'..."
+				if post "$SERVER/api/vcenter/vm/$id/power?action=start"; then
+					info "Started VM '$name' with id: '$id'"
+				else
+					err "Failed to start VM '$name' with id: '$id'"
+				fi
+			fi
 		else
 			err "Failed to create vm '$name' due to the following reason '$resp'"
 		fi

@@ -8,6 +8,7 @@ placement:
 vms:
   - 
      name: router
+     start_after_creation: true
      guest_OS: DOS
      cores: 2
      memory: 900MB
@@ -40,6 +41,7 @@ vms:
         allow_guest_control: false
   - 
      name: switch
+     start_after_creation: false
      guest_OS: DOS
      cores: 4
      memory: 900MB
