@@ -1,0 +1,301 @@
+#!/bin/sh
+
+#==================================================================================================
+#title           :quicklab
+#description     :quickly create/destroy multiple vms on vmware vcenter
+#author          :Wesley van Tilburg
+#license         :MIT
+#date            :05/03/2023
+#version         :0.1
+#=================================================================================================
+
+usage(){ printf "quicklab v0.1; 
+USAGE
+	quicklab  [args...]
+ARGS
+	-d enable debug logging
+	-s the vcenter server
+	-u username to login
+	-i ignore certificate errors
+	-m mode (create,destroy)
+	-f the file containing the lab settings
+	-h show this menu
+";
+exit 0
+}
+
+#=================Util functions=================
+
+#Edit version of the log functions for aweb by job79
+log() printf '\033[%sm%-0s \e[0m| %s\n' "${1:-33}" "$2" "$3" 
+
+debug(){ if [ "$DEBUG" ]; then log "37" "DEBUG" "$1";fi }
+info()  log "34" "INFO" "$1"
+warn()  log "33" "WARNING" "$1" 
+err() log "06;31" "ERROR" "$1"
+errf(){ log "06;31" "ERROR" "$1"; exit 1; } #fatal error variant
+
+#curl helper functions
+request() eval "$CURL $1"
+get() request "-X GET $1"
+post() request "-X POST $1"
+#===============================================
+
+#Parse the placement field 
+parse_placement(){
+	info "Parsing placement fields and getting ids.."
+	fields="cluster resource-pool datastore folder"
+	for field in $fields 
+	do
+		#get the value from the yml
+		yfield=".placement.$field"
+		yvalue="$(yq -r "$yfield" $FILE)"
+
+		#get the correct element for field $field and name $yvalue (name) if it does exists and is accessible by the user
+		idjson="$(get "$SERVER/api/vcenter/$field" | jq --arg value "$yvalue" -r '.[] | select(.name==$value)')"
+
+		#Fix the stupid naming difference: api url: resource-pool, response json: resource_pool
+		if [ "$field" == "resource-pool" ]; then field="resource_pool"; fi 
+
+		id="$(echo $idjson | jq --arg field "$field" -r '.[$field]')"
+		if [ -z "$id" ]; then errf "Failed to get id for '$field' with the name '$yvalue' "; fi
+		debug "$field : $id"
+
+		#create a $field.json
+		jq -n --arg field "$field" --arg id "$id" '{ "placement": { '$field': $id}}' >> "$TMP/$field".json
+	done
+
+	#create the placement json
+	PLACEJSON="$(jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/"*.json >> "$TMP/placement.json")"
+	debug "placement json: $(cat "$TMP/placement.json")"
+}
+
+#parse the nics
+#$1 is the vm index
+#$2 are the vm nics
+parse_nics(){
+	#get the amount of nics
+	nics="$( echo "$2" | yq -r ". | length" )"
+	debug "nics: $nics"
+	local index=0
+	jnics=""
+
+	while [ "$index" -lt "$nics" ]
+	do
+		ynetwork="$(echo "$2" | yq -r ".["$index"] .network")"
+
+		jnetwork="$(echo "$NETWORKS"| jq --arg value "$ynetwork" -r '.[] | select(.name==$value)')"
+		type="$(echo "$jnetwork" | jq -r '.type')"
+		network="$(echo "$jnetwork" | jq -r '.network')"
+
+		#create nic json 
+		jnic="$(jq -n --arg type "$type" --arg network "$network" \
+			'{"backing":{"network":$network,"type":$type},"start_connected": true}')"
+		jnics="$jnics $jnic"
+		index=$((index+1))
+	done
+
+	#create the nic json array
+	echo $jnics | jq -n '.nics |= [inputs]' >> "$TMP/$1/nics.json"
+}
+
+#parse the disks
+#$1 is the vm index
+#$2 are the vm disks
+parse_disks(){
+	#get the amount of disks
+	disks="$( echo "$2" | yq -r ". | length" )"
+	debug "disks: $disks"
+	local index=0
+	jdisks=""
+
+	while [ "$index" -lt "$disks" ]
+	do
+		local name="$(echo "$2" | yq -r ".["$index"] .name")"
+		if ! capacity="$(units -o "%f" -t "$(echo "$2" | yq -r ".["$index"] .capacity")" "bytes" | cut -d. -f1 2>/dev/null)"; then
+			err "Failed to parse disk capacity for vm '$1' disk '$name'"
+			continue
+		fi
+
+		#create disk json 
+		jdisk="$(jq -n --arg name "$name" --arg capacity "$capacity" \
+			'{"new_vmdk":{"capacity":$capacity,"name":$name},"type": "IDE"}')"
+		jdisks="$jdisks $jdisk"
+		index=$((index+1))
+	done
+
+	#create the disk json array
+	echo $jdisks | jq -n '.disks |= [inputs]' >> "$TMP/$1/disks.json"
+}
+
+#parse the cds
+#$1 is the vm index
+#$2 are the vm cds
+parse_cds(){
+	#get the amount of cds
+	cds="$( echo "$2" | yq -r ". | length" )"
+	debug "cds: $cds"
+	local index=0
+	jcds=""
+
+	while [ "$index" -lt "$cds" ]
+	do
+		iso="$(echo "$2" | yq -r ".["$index"] .iso_file")"
+		connected="$(echo "$2" | yq -r ".["$index"] .start_connected")"
+		control="$(echo "$2" | yq -r ".["$index"] .allow_guest_control")"
+	
+		#create cds json 
+		jcd="$(jq -n --arg iso "$iso" --arg control "$control" --arg connected "$connected" \
+			'{"backing":{"iso_file":$iso,"type":"ISO_FILE"},"allow_guest_control": $control,"type":"IDE", "start_connected" : $connected}')"
+		jcds="$jcds $jcd"
+		index=$((index+1))
+	done
+
+	#create the disk json array
+	echo $jcds | jq -n '.cdroms |= [inputs]' >> "$TMP/$1/cds.json"
+}
+
+
+
+#================= Create Logic =================
+create(){
+	#create a temp dir 
+	TMP="$(mktemp -d)"
+
+	#some vars
+	filename="$(basename $FILE .yaml )"
+	jvms=""
+
+	#parse the placement field
+	parse_placement
+	
+	#Get all networks that the user can access to limit calls
+	NETWORKS="$(get "$SERVER/api/vcenter/network")"
+	debug "networks: $NETWORKS"
+
+	#get amount of vms
+	vms="$(yq '.vms | length' "$FILE" 2>/dev/null)"
+	if [ "$vms" -eq 0 ]; then errf "No vms found in '$FILE'"; fi
+	local index=0
+	info "Parsing vms.."
+
+	#parse all the vms
+	while [ "$index" -lt "$vms" ]
+	do
+		debug "Parsing vm: $index"
+		mkdir -p "$TMP/$index" && cp "$TMP/placement.json" "$TMP/$index"
+
+		#handle the simple fields
+		local name="$(yq -r ".vms["$index"] .name" "$FILE")"
+		os="$(yq -r ".vms["$index"] .guest_OS" "$FILE")"
+		cores="$(yq -r ".vms["$index"] .cores" "$FILE")"
+		if ! memory="$(units -o "%f" -t "$(yq -r ".vms[$index].memory" ./lab2.yaml)" "MB" | cut -d. -f1 2>/dev/null)"; then
+			err "Failed to parse memory for vm '$name'"
+			continue
+		fi
+		debug "memory $memory"
+
+		#create the json for the simple parts
+		jq -n --arg name "$name" --arg os "$os" --arg cores "$cores" --arg memory "$memory" '{"name":$name,"guest_OS":$os,"cpu":{"count":$cores},"memory":{"size_MiB":$memory}}' >> "$TMP/$index/simple.json"
+
+		#Handle the seperate hardware fields
+		parse_nics "$index" "$(yq -r ".vms[$index] .nics" $FILE)" 
+		parse_disks "$index" "$(yq -r ".vms[$index] .disks" $FILE)" 
+		parse_cds "$index" "$(yq -r ".vms[$index] .cds" $FILE)" 
+
+		#create the final vm json
+	        jq -n 'reduce inputs as $i ({}; . * $i)' "$TMP/$index"/*.json >> "$TMP/$index/vm.json"
+		debug "VM json: $(cat $TMP/$index/vm.json)"
+
+		#create the vm and save the id to a file
+		resp="$(post "-H 'Content-Type: application/json' -d @$TMP/$index/vm.json $SERVER/api/vcenter/vm")"
+		err="$(echo "$resp" | jq -r '.error_type' 2>/dev/null)"
+		if [ -z "$err" ]; then
+			id="$(echo $resp | jq -r )"
+			info "Created vm '$name' with id $id"
+
+			#create the following json: {"name": "vmname", "id":"vm-******"}
+                        jvm="$(jq -n --arg name "$name" --arg id "$id" '{"name": $name, "id",$id}' )"
+			jvms="$jvms $jvm"
+
+			#start the vm after creation if required
+			start="$(yq -r ".vms["$index"] .start_after_creation" "$FILE")"
+			if "$start"; then 
+				info "Starting VM '$name' with id: '$id'..."
+				if post "$SERVER/api/vcenter/vm/$id/power?action=start"; then
+					info "Started VM '$name' with id: '$id'"
+				else
+					err "Failed to start VM '$name' with id: '$id'"
+				fi
+			fi
+		else
+			err "Failed to create vm '$name' due to the following reason '$resp'"
+		fi
+	
+		index=$((index+1))
+	done
+		#store the vm in json format which can be used by the destory method/ other tools
+		echo $jvms | jq -n '.vms |= [inputs]' >> "$PWD/$filename.json"
+}
+
+#================= Dependency Logic =================
+#Check if the requirements are installed
+tools="curl jq yq"
+for tool in $tools
+do
+	if ! command -v $tool >/dev/null; then err "Missing dependency: $tool";fi
+done
+
+#================= Argument Logic=================
+#Default curl arguments
+CURL="curl -s "
+
+#handle input
+while getopts 'du:m:f:is:h' OPTION 2>/dev/null; do
+	case "$OPTION" in
+		d) DEBUG=true;;
+		f) FILE="$OPTARG";;
+		h) usage; exit 0;;
+		i) CURL="$CURL -k";;
+		m) METHOD="$OPTARG";;
+		s) SERVER="$OPTARG";;
+		u) USER="$OPTARG";;
+	esac
+done
+
+#check the required arguments
+if [ -z "$FILE" ] || [ -z "$METHOD" ] || [ -z "$SERVER" ] || [ -z "$USER" ] ; then errf "One of the required arguments is missing"; fi;
+
+
+#validate method, this check serves as an early exit
+if  [ "$METHOD" != "create" ] && [ "$METHOD" != "destroy" ]; then errf "Method: '$METHOD' is not valid"; fi;
+
+#Append https:// if not given
+if ! echo "$SERVER" | grep -E -q "(http|https)://)"; then 
+	SERVER="https://$SERVER"
+fi
+
+#make sure that the file exists
+if ! [ -f "$FILE" ]; then errf "File: '$FILE' does not exist."; fi
+
+#Make sure we can access the server
+if ! nc -zw2 "$(echo $SERVER | cut -d// -f3 )" 443 2>/dev/null; then errf "Cannot reach server '$SERVER'"; fi;
+
+#Read the password
+info "Enter password (Will not echo)";stty -echo;read PASS; stty echo
+info "Trying to login.."
+
+#Login to the server
+session="$(post "$SERVER/api/session -u $USER:$PASS" | jq -r )"
+if ! [ -z "$( echo $session | grep error)" ]; then errf "Failed to login"; fi
+info "Login successful"
+CURL="$CURL -H 'vmware-api-session-id: $session'"
+
+#Execute correct logic
+case $METHOD in
+	create) create;;
+esac
+
+
+
+
