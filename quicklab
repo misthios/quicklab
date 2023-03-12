@@ -9,6 +9,7 @@
 #version         :0.1
 #=================================================================================================
 
+
 usage(){ printf "quicklab v0.1; 
 USAGE
 	quicklab  [args...]
@@ -34,6 +35,14 @@ info()  log "34" "INFO" "$1"
 warn()  log "33" "WARNING" "$1" 
 err() log "06;31" "ERROR" "$1"
 errf(){ log "06;31" "ERROR" "$1"; exit 1; } #fatal error variant
+
+cleanup(){
+	info "Cleaning tmp files.."
+	rm -rf "$TMP"
+	info "Finished cleaning"
+	exit
+}
+trap cleanup INT QUIT TERM
 
 #curl helper functions
 request() eval "$CURL $1"
@@ -236,7 +245,7 @@ create(){
 		index=$((index+1))
 	done
 		#store the vm in json format which can be used by the destory method/ other tools
-		echo $jvms | jq -n '.vms |= [inputs]' >> "$PWD/$filename.json"
+		if ! [ "$jvms" == "" ]; then echo $jvms | jq -n '.vms |= [inputs]' > "$PWD/$filename.json"; info "Created vms json";fi
 }
 
 #================= Destroy Logic =================
@@ -279,7 +288,7 @@ destroy(){
 }
 #================= Dependency Logic =================
 #Check if the requirements are installed
-tools="curl jq yq"
+tools="curl jq yq units"
 for tool in $tools
 do
 	if ! command -v $tool >/dev/null; then err "Missing dependency: $tool";fi
@@ -354,6 +363,7 @@ case $METHOD in
 	destroy) destroy;;
 esac
 
+cleanup
 
 
 
