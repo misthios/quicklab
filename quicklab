@@ -293,7 +293,7 @@ destroy(){
 tools="curl jq yq units"
 for tool in $tools
 do
-	if ! command -v "$tool" >/dev/null; then err "Missing dependency: $tool";fi
+	if ! command -v "$tool" >/dev/null; then errf "Missing dependency: $tool";fi
 done
 
 #================= Argument Logic=================
