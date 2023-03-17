@@ -6,12 +6,12 @@
 #description     :quickly create/destroy multiple vms on vmware vcenter
 #author          :Wesley van Tilburg
 #license         :MIT
-#date            :12/03/2023
-#version         :0.1
+#date            :17/03/2023
+#version         :0.2
 #=================================================================================================
 
 
-usage(){ printf "quicklab v0.1; 
+usage(){ printf "quicklab v0.2; 
 USAGE
 	quicklab  [args...]
 ARGS
