@@ -201,7 +201,7 @@ create(){
 		vname="$(yq -r ".vms["$index"] .name" "$FILE")"
 		os="$(yq -r ".vms["$index"] .guest_OS" "$FILE")"
 		cores="$(yq -r ".vms["$index"] .cores" "$FILE")"
-		if ! memory="$(units -o "%f" -t "$(yq -r ".vms[$index].memory" ./lab2.yaml)" "MB" | cut -d. -f1 2>/dev/null)"; then
+		if ! memory="$(units -o "%f" -t "$(yq -r ".vms[$index].memory" "$FILE")" "MB" | cut -d. -f1 2>/dev/null)"; then
 			err "Failed to parse memory for vm '$vname'"
 			continue
 		fi
